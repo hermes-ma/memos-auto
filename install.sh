@@ -15,21 +15,21 @@ sleep 2
 echo -e "\n${YELLOW}[1/4] 正在优化基础环境 (切换清华源，安装基础工具)...${NC}"
 DOMAIN="mirrors.tuna.tsinghua.edu.cn"
 echo "deb https://${DOMAIN}/termux/apt/termux-main stable main" > $PREFIX/etc/apt/sources.list
-pkg update -y -o Dpkg::Options::="--force-confnew"
-pkg install -y openssh lsof proot-distro jq npm
+# 使用 upgrade 确保环境变量和底层库最新，防止 cpu_arch 报错
+pkg upgrade -y -o Dpkg::Options::="--force-confnew"
+pkg install -y openssh lsof proot-distro jq npm curl wget
 
 echo -e "\n${YELLOW}[2/4] 正在安装Node.js进程管家 (PM2)...${NC}"
 npm install -g pm2
 
-# ---------------- 阶段 2：安装核心Ubuntu (含智能跳过) ----------------
-if [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu" ]; then
-    echo -e "\n${GREEN}[3/4] 检测到已安装Ubuntu核心容器，智能跳过拉取过程...${NC}"
-else
-    echo -e "\n${YELLOW}[3/4] 正在拉取Ubuntu核心容器 (时间较长，请耐心等待)...${NC}"
-    # 彻底拆开网址，防止任何笔记软件自动生成括号超链接
-    UBUNTU_REPO="raw.githubusercontent.com/mithun50"
-    curl -fsSL https://${UBUNTU_REPO}/openclaw-termux/main/install.sh | bash
-fi
+# ---------------- 阶段 2：强制安装核心Ubuntu ----------------
+echo -e "\n${YELLOW}[3/4] 正在拉取并初始化 Ubuntu 核心容器...${NC}"
+# 明确执行官方容器安装，防止依赖缺失
+proot-distro install ubuntu
+
+# 执行原作者的核心安装脚本 (拆解网址防格式化)
+REPO="raw.githubusercontent.com/mithun50"
+curl -fsSL https://${REPO}/openclaw-termux/main/install.sh | bash
 
 # ---------------- 阶段 3：交互式获取凭证 ----------------
 echo -e "\n${CYAN}====================================================${NC}"
@@ -42,43 +42,38 @@ if [ -z "$USER_API_KEY" ]; then
     exit 1
 fi
 
-# ---------------- 阶段 4：跨容器自动化手术 ----------------
-echo -e "\n${YELLOW}[4/4] 正在进行系统纯净手术：注入配置、修复冲突...${NC}"
+# ---------------- 阶段 4：进入容器内部进行“微创手术” ----------------
+echo -e "\n${YELLOW}[4/4] 正在进入 Ubuntu 容器内部注入配置...${NC}"
 
-UBUNTU_ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
-# 【修复点】：使用 /tmp 目录，并提前确保目录存在，避免找不到文件夹的报错
-mkdir -p "$UBUNTU_ROOTFS/tmp"
-
-cat << 'EOF' > "$UBUNTU_ROOTFS/tmp/setup_inside.sh"
-#!/bin/bash
-export DEBIAN_FRONTEND=noninteractive
-
-# 1. 写入API Key (进入容器后，容器会自动生成缺失的 /root)
-mkdir -p /root/.openclaw
-echo "MEMOS_API_KEY=$1" > /root/.openclaw/.env
-
-# 2. 安装直连插件
-npm install -g @memtensor/memos-cloud-openclaw-plugin@latest
-
-# 3. 修复JSON
-JSON_FILE="/root/.openclaw/openclaw.json"
-if [ -f "$JSON_FILE" ]; then
+# 核心修复：不再从外部强行写文件，而是直接登录进 ubuntu 内部执行一连串命令！
+proot-distro login ubuntu -- bash -c "
+    export DEBIAN_FRONTEND=noninteractive
+    
+    # 1. 写入 API Key
+    mkdir -p /root/.openclaw
+    echo 'MEMOS_API_KEY=${USER_API_KEY}' > /root/.openclaw/.env
+    
+    # 2. 安装直连插件
+    npm install -g @memtensor/memos-cloud-openclaw-plugin@latest
+    
+    # 3. 安装 jq 并修复 JSON
     apt update && apt install -y jq
-    jq 'del(.tools["@memtensor/memos-cloud-openclaw-plugin"].apiKey) | .tools.profile = "default"' "$JSON_FILE" > "$JSON_FILE.tmp" && mv "$JSON_FILE.tmp" "$JSON_FILE"
-fi
-EOF
+    JSON_FILE=\"/root/.openclaw/openclaw.json\"
+    if [ -f \"\$JSON_FILE\" ]; then
+        jq 'del(.tools[\"@memtensor/memos-cloud-openclaw-plugin\"].apiKey) | .tools.profile = \"default\"' \"\$JSON_FILE\" > \"\$JSON_FILE.tmp\" && mv \"\$JSON_FILE.tmp\" \"\$JSON_FILE\"
+    fi
+"
 
-chmod +x "$UBUNTU_ROOTFS/tmp/setup_inside.sh"
-# 【修复点】：指向 /tmp 里的新脚本
-proot-distro login ubuntu -- bash /tmp/setup_inside.sh "$USER_API_KEY"
-
-# ---------------- 注入终极指令 ----------------
+# ---------------- 注入终极防死锁指令 (内外兼修) ----------------
 sed -i '/alias reboot-memos/d' ~/.bashrc
 echo '#!/bin/bash' > ~/start.sh
 echo 'pm2 kill' >> ~/start.sh
+# 杀掉外层的残余
 echo 'pkill -9 -f openclaw 2>/dev/null' >> ~/start.sh
-echo 'rm -f ~/.openclaw/openclaw.lock 2>/dev/null' >> ~/start.sh
-echo 'rm -f ~/.openclaw/gateway.pid 2>/dev/null' >> ~/start.sh
+# 派杀手进 Ubuntu 内部彻底清理 Node 进程和死锁文件
+echo 'proot-distro login ubuntu -- pkill -9 node 2>/dev/null' >> ~/start.sh
+echo 'proot-distro login ubuntu -- rm -f /root/.openclaw/openclaw.lock 2>/dev/null' >> ~/start.sh
+echo 'proot-distro login ubuntu -- rm -f /root/.openclaw/gateway.pid 2>/dev/null' >> ~/start.sh
 echo 'sleep 1' >> ~/start.sh
 echo 'pm2 flush' >> ~/start.sh
 echo 'pm2 start "openclawx gateway --verbose" --name "memos-node"' >> ~/start.sh
@@ -101,9 +96,7 @@ sshd
 
 echo -e "\n${CYAN}====================================================${NC}"
 echo -e "💡  ${YELLOW}【接下来该做什么？】${NC}"
-echo -e "1. 执行${GREEN}openclawx onboarding${NC}，根据提示填入你自己的飞书应用凭证（遇到是否新装飞书插件请选“否/自带”）。"
-echo -e "2. 在你的电脑Chrome浏览器上安装${GREEN}OpenClaw Browser Relay${NC}插件，让手机网关借用电脑的算力看网页！"
+echo -e "1. 执行${GREEN}openclawx onboarding${NC}，根据提示填入你自己的飞书应用凭证。"
+echo -e "2. 在电脑上安装 Browser Relay 插件协同工作！"
 echo -e "${CYAN}====================================================${NC}"
-
-echo -e "\n${GREEN}一切准备就绪！${NC}"
-echo -e "日常维护请直接输入${YELLOW}reboot-memos${NC}并回车，一键启动你的AI网关吧！"
+echo -e "日常维护请直接输入 ${YELLOW}reboot-memos${NC} 并回车！"
