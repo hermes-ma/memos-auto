@@ -13,7 +13,8 @@ sleep 2
 
 # ---------------- 阶段 1：Termux基础环境 ----------------
 echo -e "\n${YELLOW}[1/4] 正在优化基础环境 (切换清华源，安装基础工具)...${NC}"
-echo "deb [https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main](https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main) stable main" > $PREFIX/etc/apt/sources.list
+DOMAIN="mirrors.tuna.tsinghua.edu.cn"
+echo "deb https://${DOMAIN}/termux/apt/termux-main stable main" > $PREFIX/etc/apt/sources.list
 pkg update -y -o Dpkg::Options::="--force-confnew"
 pkg install -y openssh lsof proot-distro jq npm
 
@@ -22,7 +23,7 @@ npm install -g pm2
 
 # ---------------- 阶段 2：安装核心Ubuntu ----------------
 echo -e "\n${YELLOW}[3/4] 正在拉取Ubuntu核心容器 (时间较长，请耐心等待)...${NC}"
-curl -fsSL [https://raw.githubusercontent.com/mithun50/openclaw-termux/main/install.sh](https://raw.githubusercontent.com/mithun50/openclaw-termux/main/install.sh) | bash
+curl -fsSL https://raw.githubusercontent.com/mithun50/openclaw-termux/main/install.sh | bash
 
 # ---------------- 阶段 3：交互式获取凭证 ----------------
 echo -e "\n${CYAN}====================================================${NC}"
