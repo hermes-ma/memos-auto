@@ -11,25 +11,28 @@ echo -e "${GREEN}  🚀 OpenClaw + MemOS安卓云端节点一键安装向导 ${N
 echo -e "${CYAN}====================================================${NC}"
 sleep 2
 
-# ---------------- 阶段 1：Termux基础环境 ----------------
-echo -e "\n${YELLOW}[1/4] 正在优化基础环境 (切换清华源，安装基础工具)...${NC}"
+# ---------------- 阶段 1：Termux基础环境与网络加速 ----------------
+echo -e "\n${YELLOW}[1/4] 正在优化基础环境与网络加速...${NC}"
 DOMAIN="mirrors.tuna.tsinghua.edu.cn"
 echo "deb https://${DOMAIN}/termux/apt/termux-main stable main" > $PREFIX/etc/apt/sources.list
-# 使用 upgrade 确保环境变量和底层库最新，防止 cpu_arch 报错
 pkg upgrade -y -o Dpkg::Options::="--force-confnew"
 pkg install -y openssh lsof proot-distro jq npm curl wget
 
-echo -e "\n${YELLOW}[2/4] 正在安装Node.js进程管家 (PM2)...${NC}"
+# 【核心修复1：换淘宝NPM镜像，防止300000ms超时】
+echo -e "\n${YELLOW}配置 NPM 国内加速源...${NC}"
+npm config set registry https://registry.npmmirror.com
+
+echo -e "\n${YELLOW}[2/4] 正在极速安装Node.js进程管家 (PM2)...${NC}"
 npm install -g pm2
 
 # ---------------- 阶段 2：强制安装核心Ubuntu ----------------
 echo -e "\n${YELLOW}[3/4] 正在拉取并初始化 Ubuntu 核心容器...${NC}"
-# 明确执行官方容器安装，防止依赖缺失
 proot-distro install ubuntu
 
-# 执行原作者的核心安装脚本 (拆解网址防格式化)
+# 【核心修复2：使用 GHProxy 加速下载 GitHub 上的核心安装脚本】
+echo -e "\n${YELLOW}正在通过加速通道拉取 OpenClaw 核心服务...${NC}"
 REPO="raw.githubusercontent.com/mithun50"
-curl -fsSL https://${REPO}/openclaw-termux/main/install.sh | bash
+curl -fsSL https://ghp.ci/https://${REPO}/openclaw-termux/main/install.sh | bash
 
 # ---------------- 阶段 3：交互式获取凭证 ----------------
 echo -e "\n${CYAN}====================================================${NC}"
@@ -45,15 +48,17 @@ fi
 # ---------------- 阶段 4：进入容器内部进行“微创手术” ----------------
 echo -e "\n${YELLOW}[4/4] 正在进入 Ubuntu 容器内部注入配置...${NC}"
 
-# 核心修复：不再从外部强行写文件，而是直接登录进 ubuntu 内部执行一连串命令！
 proot-distro login ubuntu -- bash -c "
     export DEBIAN_FRONTEND=noninteractive
+    
+    # 容器内也配置 NPM 加速源
+    npm config set registry https://registry.npmmirror.com
     
     # 1. 写入 API Key
     mkdir -p /root/.openclaw
     echo 'MEMOS_API_KEY=${USER_API_KEY}' > /root/.openclaw/.env
     
-    # 2. 安装直连插件
+    # 2. 极速安装直连插件
     npm install -g @memtensor/memos-cloud-openclaw-plugin@latest
     
     # 3. 安装 jq 并修复 JSON
@@ -68,9 +73,7 @@ proot-distro login ubuntu -- bash -c "
 sed -i '/alias reboot-memos/d' ~/.bashrc
 echo '#!/bin/bash' > ~/start.sh
 echo 'pm2 kill' >> ~/start.sh
-# 杀掉外层的残余
 echo 'pkill -9 -f openclaw 2>/dev/null' >> ~/start.sh
-# 派杀手进 Ubuntu 内部彻底清理 Node 进程和死锁文件
 echo 'proot-distro login ubuntu -- pkill -9 node 2>/dev/null' >> ~/start.sh
 echo 'proot-distro login ubuntu -- rm -f /root/.openclaw/openclaw.lock 2>/dev/null' >> ~/start.sh
 echo 'proot-distro login ubuntu -- rm -f /root/.openclaw/gateway.pid 2>/dev/null' >> ~/start.sh
