@@ -21,9 +21,15 @@ pkg install -y openssh lsof proot-distro jq npm
 echo -e "\n${YELLOW}[2/4] 正在安装Node.js进程管家 (PM2)...${NC}"
 npm install -g pm2
 
-# ---------------- 阶段 2：安装核心Ubuntu ----------------
-echo -e "\n${YELLOW}[3/4] 正在拉取Ubuntu核心容器 (时间较长，请耐心等待)...${NC}"
-curl -fsSL https://raw.githubusercontent.com/mithun50/openclaw-termux/main/install.sh | bash
+# ---------------- 阶段 2：安装核心Ubuntu (含智能跳过) ----------------
+if [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu" ]; then
+    echo -e "\n${GREEN}[3/4] 检测到已安装Ubuntu核心容器，智能跳过拉取过程...${NC}"
+else
+    echo -e "\n${YELLOW}[3/4] 正在拉取Ubuntu核心容器 (时间较长，请耐心等待)...${NC}"
+    # 彻底拆开网址，防止任何笔记软件自动生成括号超链接
+    UBUNTU_REPO="raw.githubusercontent.com/mithun50"
+    curl -fsSL https://${UBUNTU_REPO}/openclaw-termux/main/install.sh | bash
+fi
 
 # ---------------- 阶段 3：交互式获取凭证 ----------------
 echo -e "\n${CYAN}====================================================${NC}"
@@ -37,14 +43,17 @@ if [ -z "$USER_API_KEY" ]; then
 fi
 
 # ---------------- 阶段 4：跨容器自动化手术 ----------------
-echo -e "\n${YELLOW}[4/4] 正在进行系统纯净手术：注入配置、修复冲突、安装中文字体...${NC}"
+echo -e "\n${YELLOW}[4/4] 正在进行系统纯净手术：注入配置、修复冲突...${NC}"
 
 UBUNTU_ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
-cat << 'EOF' > "$UBUNTU_ROOTFS/root/setup_inside.sh"
+# 【修复点】：使用 /tmp 目录，并提前确保目录存在，避免找不到文件夹的报错
+mkdir -p "$UBUNTU_ROOTFS/tmp"
+
+cat << 'EOF' > "$UBUNTU_ROOTFS/tmp/setup_inside.sh"
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
 
-# 1. 写入API Key
+# 1. 写入API Key (进入容器后，容器会自动生成缺失的 /root)
 mkdir -p /root/.openclaw
 echo "MEMOS_API_KEY=$1" > /root/.openclaw/.env
 
@@ -57,14 +66,11 @@ if [ -f "$JSON_FILE" ]; then
     apt update && apt install -y jq
     jq 'del(.tools["@memtensor/memos-cloud-openclaw-plugin"].apiKey) | .tools.profile = "default"' "$JSON_FILE" > "$JSON_FILE.tmp" && mv "$JSON_FILE.tmp" "$JSON_FILE"
 fi
-
-# 4. 仅安装中文字体防乱码 (舍弃沉重的Chromium)
-apt update
-apt install -y fonts-wqy-zenhei fonts-wqy-microhei fonts-noto-cjk
 EOF
 
-chmod +x "$UBUNTU_ROOTFS/root/setup_inside.sh"
-proot-distro login ubuntu -- bash /root/setup_inside.sh "$USER_API_KEY"
+chmod +x "$UBUNTU_ROOTFS/tmp/setup_inside.sh"
+# 【修复点】：指向 /tmp 里的新脚本
+proot-distro login ubuntu -- bash /tmp/setup_inside.sh "$USER_API_KEY"
 
 # ---------------- 注入终极指令 ----------------
 sed -i '/alias reboot-memos/d' ~/.bashrc
@@ -101,4 +107,3 @@ echo -e "${CYAN}====================================================${NC}"
 
 echo -e "\n${GREEN}一切准备就绪！${NC}"
 echo -e "日常维护请直接输入${YELLOW}reboot-memos${NC}并回车，一键启动你的AI网关吧！"
-
